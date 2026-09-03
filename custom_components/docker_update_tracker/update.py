@@ -48,7 +48,11 @@ async def async_setup_entry(
 class DockerContainerUpdateEntity(CoordinatorEntity[DockerUpdateCoordinator], UpdateEntity):
     """One update entity per Docker container."""
 
-    _attr_has_entity_name = True
+    # False (not the newer has_entity_name=True pattern): the displayed
+    # friendly_name should be exactly the container's display name
+    # ("Home Assistant"), not prefixed with the device/host name
+    # ("HAPC Home Assistant").
+    _attr_has_entity_name = False
     # No supported_features override needed - UpdateEntity's own default
     # (no features, no INSTALL button) is exactly what we want, since
     # this integration is informational only by design. Setting a bare
