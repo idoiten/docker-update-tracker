@@ -2,12 +2,19 @@
 from __future__ import annotations
 
 DOMAIN = "docker_update_tracker"
-PLATFORMS = ["update"]
+PLATFORMS = ["update", "binary_sensor", "sensor"]
 
 CONF_NAME = "name"
 CONF_PROXY_URL = "proxy_url"
+CONF_SCAN_INTERVAL_HOURS = "scan_interval_hours"
+CONF_DOCKERHUB_USERNAME = "dockerhub_username"
+CONF_DOCKERHUB_TOKEN = "dockerhub_token"
+CONF_GHCR_USERNAME = "ghcr_username"
+CONF_GHCR_TOKEN = "ghcr_token"
 
 DEFAULT_SCAN_INTERVAL_HOURS = 12
+
+GHCR_REGISTRY = "ghcr.io"
 
 # Registry hosts that are NOT Docker Hub. Anything whose image reference's
 # first path segment contains a "." or ":" is treated as an explicit

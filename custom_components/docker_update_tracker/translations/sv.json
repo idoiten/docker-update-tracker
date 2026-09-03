@@ -16,5 +16,20 @@
     "abort": {
       "already_configured": "Den här värden är redan konfigurerad."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Globala inställningar",
+        "description": "De här inställningarna gäller för ALLA konfigurerade Docker-värdar, inte bara den här — att spara här uppdaterar varje värd och laddar om dem alla. Docker Hub-/GHCR-inloggning är valfritt men starkt rekommenderat: anonyma registerförfrågningar har en låg hastighetsgräns och kan börja misslyckas (429 Too Many Requests) vid vanlig användning.",
+        "data": {
+          "scan_interval_hours": "Skanningsintervall (timmar)",
+          "dockerhub_username": "Docker Hub-användarnamn (valfritt)",
+          "dockerhub_token": "Docker Hub-åtkomsttoken (valfritt)",
+          "ghcr_username": "GHCR (GitHub)-användarnamn (valfritt)",
+          "ghcr_token": "GHCR personlig åtkomsttoken (valfritt)"
+        }
+      }
+    }
   }
 }

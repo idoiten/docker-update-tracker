@@ -102,11 +102,24 @@ def parse_image_ref(image_ref: str) -> tuple[str | None, str, str]:
 
 
 class RegistryClient:
-    """Looks up the current manifest digest for an image:tag from its registry."""
+    """Looks up the current manifest digest for an image:tag from its registry.
 
-    def __init__(self, session: aiohttp.ClientSession) -> None:
+    credentials, if given, maps a registry host (e.g. "registry-1.docker.io",
+    "ghcr.io") to a (username, password_or_token) tuple, sent as HTTP Basic
+    Auth on the token request for that host. Authenticated requests get a
+    much higher rate limit than anonymous ones (this is what triggered
+    429 Too Many Requests during heavy manual testing - see CHANGELOG).
+    Hosts with no entry fall back to the existing anonymous flow.
+    """
+
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        credentials: dict[str, tuple[str, str]] | None = None,
+    ) -> None:
         self._session = session
         self._token_cache: dict[str, str] = {}
+        self._credentials = credentials or {}
 
     async def get_latest_digest(self, image_ref: str) -> str:
         """Return the current 'Docker-Content-Digest' for image_ref's tag."""
@@ -183,9 +196,12 @@ class RegistryClient:
         query = {k: v for k, v in params.items() if k != "realm"}
         query.setdefault("scope", f"repository:{repo}:pull")
 
+        creds = self._credentials.get(host)
+        auth = aiohttp.BasicAuth(*creds) if creds else None
+
         try:
             async with self._session.get(
-                realm, params=query, timeout=aiohttp.ClientTimeout(total=15)
+                realm, params=query, auth=auth, timeout=aiohttp.ClientTimeout(total=15)
             ) as token_resp:
                 token_resp.raise_for_status()
                 data = await token_resp.json()

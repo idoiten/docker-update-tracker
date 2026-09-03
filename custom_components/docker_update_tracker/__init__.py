@@ -14,6 +14,12 @@ image removed upstream, unusual reference we can't parse, ...) never
 fails the whole coordinator update - that container is just reported
 without a known latest_digest until the next successful refresh, while
 every other container's data still updates normally.
+
+scan_interval_hours and registry credentials are GLOBAL settings, not
+per-host: editing them via any single entry's "Configure" dialog writes
+the same values to every Docker Update Tracker entry and reloads all of
+them (see config_flow.py's GlobalOptionsFlowHandler) - a Docker Hub/GHCR
+login and a sensible scan cadence aren't really per-host concerns.
 """
 from __future__ import annotations
 
@@ -27,7 +33,19 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import DockerProxyClient, DockerProxyError, RegistryClient, RegistryError
-from .const import CONF_PROXY_URL, DEFAULT_SCAN_INTERVAL_HOURS, DOMAIN, PLATFORMS
+from .const import (
+    CONF_DOCKERHUB_TOKEN,
+    CONF_DOCKERHUB_USERNAME,
+    CONF_GHCR_TOKEN,
+    CONF_GHCR_USERNAME,
+    CONF_PROXY_URL,
+    CONF_SCAN_INTERVAL_HOURS,
+    DEFAULT_SCAN_INTERVAL_HOURS,
+    DOCKER_HUB_REGISTRY,
+    DOMAIN,
+    GHCR_REGISTRY,
+    PLATFORMS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,16 +59,30 @@ class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         proxy_client: DockerProxyClient,
         registry_client: RegistryClient,
         host_name: str,
+        scan_interval_hours: int,
     ) -> None:
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN} ({host_name})",
-            update_interval=timedelta(hours=DEFAULT_SCAN_INTERVAL_HOURS),
+            update_interval=timedelta(hours=scan_interval_hours),
         )
         self._proxy = proxy_client
         self._registry = registry_client
         self.host_name = host_name
+
+    @property
+    def available_updates(self) -> list[str]:
+        """Names of containers whose installed digest differs from latest."""
+        if not self.data:
+            return []
+        return [
+            name
+            for name, info in self.data.items()
+            if info.get("latest_digest")
+            and info.get("installed_digest")
+            and info["latest_digest"] != info["installed_digest"]
+        ]
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         try:
@@ -116,21 +148,55 @@ class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         return results
 
 
+def _build_credentials(options: dict) -> dict[str, tuple[str, str]]:
+    """Build the {registry_host: (user, token)} map from options, skipping
+    any pair where either half is blank."""
+    creds: dict[str, tuple[str, str]] = {}
+    dh_user = options.get(CONF_DOCKERHUB_USERNAME, "")
+    dh_token = options.get(CONF_DOCKERHUB_TOKEN, "")
+    if dh_user and dh_token:
+        creds[DOCKER_HUB_REGISTRY] = (dh_user, dh_token)
+
+    ghcr_user = options.get(CONF_GHCR_USERNAME, "")
+    ghcr_token = options.get(CONF_GHCR_TOKEN, "")
+    if ghcr_user and ghcr_token:
+        creds[GHCR_REGISTRY] = (ghcr_user, ghcr_token)
+
+    return creds
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Docker Update Tracker from a config entry."""
     session = async_get_clientsession(hass)
     proxy_client = DockerProxyClient(session, entry.data[CONF_PROXY_URL])
-    registry_client = RegistryClient(session)
+
+    credentials = _build_credentials(entry.options)
+    registry_client = RegistryClient(session, credentials=credentials)
+
+    scan_interval_hours = entry.options.get(
+        CONF_SCAN_INTERVAL_HOURS, DEFAULT_SCAN_INTERVAL_HOURS
+    )
 
     coordinator = DockerUpdateCoordinator(
-        hass, proxy_client, registry_client, entry.title
+        hass, proxy_client, registry_client, entry.title, scan_interval_hours
     )
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
+
+
+async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload this entry when its options change.
+
+    Note: GlobalOptionsFlowHandler already triggers a reload for every
+    entry itself after writing options to all of them - this listener is
+    a safety net in case options ever get updated some other way.
+    """
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
