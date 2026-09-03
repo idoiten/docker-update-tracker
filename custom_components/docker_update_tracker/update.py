@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import slugify
 
 from . import DockerUpdateCoordinator
 from .const import DOMAIN
@@ -61,6 +62,9 @@ class DockerContainerUpdateEntity(CoordinatorEntity[DockerUpdateCoordinator], Up
         self._container_name = container_name
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_{container_name}"
+        self._attr_suggested_object_id = (
+            f"dut_{slugify(coordinator.host_name)}_{slugify(container_name)}"
+        )
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=entry.title,
