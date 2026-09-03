@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 import aiohttp
 
@@ -28,6 +29,14 @@ _LOGGER = logging.getLogger(__name__)
 
 # Parses: Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:x/y:pull"
 _AUTH_HEADER_RE = re.compile(r'(\w+)="([^"]*)"')
+
+# Registry v2 tokens don't always include expires_in - fall back to this
+# (Docker Hub's own default is 300s; being conservative costs one extra
+# token request occasionally, which is far cheaper than a stale-token 401).
+DEFAULT_TOKEN_TTL_SECONDS = 60
+# Refresh slightly before actual expiry to avoid a request landing right
+# as a token expires mid-flight.
+TOKEN_EXPIRY_MARGIN_SECONDS = 10
 
 
 class DockerProxyError(Exception):
@@ -110,6 +119,15 @@ class RegistryClient:
     much higher rate limit than anonymous ones (this is what triggered
     429 Too Many Requests during heavy manual testing - see CHANGELOG).
     Hosts with no entry fall back to the existing anonymous flow.
+
+    IMPORTANT: registry bearer tokens are short-lived (Docker Hub's default
+    is 300 seconds) - the cache stores an expiry timestamp per token and
+    transparently refetches once it's past that, rather than caching
+    forever. Caching forever (the original bug) worked on the very first
+    lookup after credentials were saved, then silently started returning
+    401 Unauthorized on every subsequent scan once the token actually
+    expired, since an expired-but-present token skipped the "no token yet"
+    retry path entirely.
     """
 
     def __init__(
@@ -118,7 +136,8 @@ class RegistryClient:
         credentials: dict[str, tuple[str, str]] | None = None,
     ) -> None:
         self._session = session
-        self._token_cache: dict[str, str] = {}
+        # cache_key -> (token, expires_at_monotonic)
+        self._token_cache: dict[str, tuple[str, float]] = {}
         self._credentials = credentials or {}
 
     async def get_latest_digest(self, image_ref: str) -> str:
@@ -132,36 +151,53 @@ class RegistryClient:
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
+        digest = await self._fetch_manifest_digest(manifest_url, headers)
+        if digest is not None:
+            return digest
+
+        # 401 despite having a token: either it was stale (shouldn't
+        # happen now that expiry is tracked, but be defensive - e.g. the
+        # registry could revoke early) or we never had one. Either way,
+        # force a fresh token once and retry exactly once.
+        token = await self._get_token(host, repo, force_refresh=True)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        digest = await self._fetch_manifest_digest(manifest_url, headers, raise_on_401=True)
+        if digest is None:
+            raise RegistryError(f"No Docker-Content-Digest in response for {image_ref}")
+        return digest
+
+    async def _fetch_manifest_digest(
+        self, manifest_url: str, headers: dict, raise_on_401: bool = False
+    ) -> str | None:
+        """GET the manifest. Returns the digest, or None on a 401 (caller
+        decides whether to retry) unless raise_on_401 is set."""
         try:
             async with self._session.get(
                 manifest_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
             ) as resp:
-                if resp.status == 401 and not token:
-                    # Some registries require the challenge round-trip even
-                    # for a first request; retry once after reading it.
-                    token = await self._token_from_challenge(resp, host, repo)
-                    if token:
-                        headers["Authorization"] = f"Bearer {token}"
-                        async with self._session.get(
-                            manifest_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
-                        ) as resp2:
-                            resp2.raise_for_status()
-                            digest = resp2.headers.get("Docker-Content-Digest")
-                else:
-                    resp.raise_for_status()
-                    digest = resp.headers.get("Docker-Content-Digest")
+                if resp.status == 401 and not raise_on_401:
+                    return None
+                resp.raise_for_status()
+                digest = resp.headers.get("Docker-Content-Digest")
         except (aiohttp.ClientError, TimeoutError) as err:
-            raise RegistryError(f"Failed to query manifest for {image_ref}: {err}") from err
+            raise RegistryError(f"Failed to query manifest via {manifest_url}: {err}") from err
 
         if not digest:
-            raise RegistryError(f"No Docker-Content-Digest in response for {image_ref}")
+            raise RegistryError(f"No Docker-Content-Digest in response from {manifest_url}")
         return digest
 
-    async def _get_token(self, host: str, repo: str) -> str | None:
-        """Get (and cache) an anonymous bearer token via a probe request."""
+    async def _get_token(
+        self, host: str, repo: str, force_refresh: bool = False
+    ) -> str | None:
+        """Get a bearer token, from cache if still valid, else fetch fresh."""
         cache_key = f"{host}:{repo}"
-        if cache_key in self._token_cache:
-            return self._token_cache[cache_key]
+        if not force_refresh:
+            cached = self._token_cache.get(cache_key)
+            if cached:
+                token, expires_at = cached
+                if time.monotonic() < expires_at:
+                    return token
 
         probe_url = f"https://{host}/v2/{repo}/manifests/latest"
         try:
@@ -172,26 +208,30 @@ class RegistryClient:
             ) as resp:
                 if resp.status != 401:
                     return None  # registry didn't ask for auth at all
-                token = await self._token_from_challenge(resp, host, repo)
+                token, ttl = await self._token_from_challenge(resp, host, repo)
         except (aiohttp.ClientError, TimeoutError):
             return None
 
         if token:
-            self._token_cache[cache_key] = token
+            expires_at = time.monotonic() + max(ttl - TOKEN_EXPIRY_MARGIN_SECONDS, 5)
+            self._token_cache[cache_key] = (token, expires_at)
         return token
 
     async def _token_from_challenge(
         self, resp: aiohttp.ClientResponse, host: str, repo: str
-    ) -> str | None:
-        """Follow a WWW-Authenticate: Bearer ... challenge and fetch a token."""
+    ) -> tuple[str | None, int]:
+        """Follow a WWW-Authenticate: Bearer ... challenge and fetch a token.
+
+        Returns (token_or_None, ttl_seconds).
+        """
         challenge = resp.headers.get("WWW-Authenticate", "")
         if not challenge.lower().startswith("bearer"):
-            return None
+            return None, DEFAULT_TOKEN_TTL_SECONDS
 
         params = dict(_AUTH_HEADER_RE.findall(challenge))
         realm = params.get("realm")
         if not realm:
-            return None
+            return None, DEFAULT_TOKEN_TTL_SECONDS
 
         query = {k: v for k, v in params.items() if k != "realm"}
         query.setdefault("scope", f"repository:{repo}:pull")
@@ -208,4 +248,6 @@ class RegistryClient:
         except (aiohttp.ClientError, TimeoutError) as err:
             raise RegistryError(f"Failed to fetch auth token from {realm}: {err}") from err
 
-        return data.get("token") or data.get("access_token")
+        token = data.get("token") or data.get("access_token")
+        ttl = data.get("expires_in", DEFAULT_TOKEN_TTL_SECONDS)
+        return token, ttl
