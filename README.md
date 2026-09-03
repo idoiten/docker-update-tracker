@@ -3,7 +3,7 @@
 A native Home Assistant replacement for
 [What's Up Docker](https://getwud.github.io/wud/) — no separate
 container, no MQTT bridge. One `update.` entity per Docker container,
-across as many hosts as you like.
+across as many hosts as you like, plus per-host summary entities.
 
 ## How it works
 
@@ -27,6 +27,45 @@ no namespace (`eclipse-mosquitto`, resolved to `library/eclipse-mosquitto`).
 **This integration is read-only / informational.** It does not pull
 images or restart containers — there's no `INSTALL` button. It tells you
 what's outdated; updating is still up to you.
+
+## Entities
+
+Per container:
+- `update.<name>` — installed vs. latest digest (shortened, e.g. `372d991e5888`)
+
+Per host (one config entry = one host):
+- `binary_sensor.<host>_uppdatering_tillganglig` ("Uppdatering
+  tillgänglig") — on if any container on that host has an update
+  available
+- `sensor.<host>_antal_tillgangliga_uppdateringar` ("Antal
+  tillgängliga uppdateringar") — count of containers with an update
+  available
+
+(Exact `entity_id`s depend on Home Assistant's own global Entity ID
+format setting — Settings → Devices & Services → the gear icon — the
+Swedish `friendly_name`s above are always exactly as shown regardless.)
+
+## Global settings
+
+Docker Hub / GHCR credentials and the scan interval are configured via
+**"Configure" on any single host entry** — Settings → Devices & Services
+→ Docker Update Tracker → any host → Configure. Saving there writes the
+same settings to *every* configured host and reloads them all: a
+registry login isn't a per-host concept, so there's no reason to
+duplicate it per entry.
+
+- **Scan interval**: 1–168 hours, default 12 (matches a common WUD cron
+  cadence). Hourly polling of a couple dozen containers can add up to
+  hundreds of registry requests a day.
+- **Docker Hub / GHCR username + token** (both optional, independently):
+  anonymous registry requests have a low rate limit and can start
+  failing with `429 Too Many Requests` under regular use (this is what
+  happened during this integration's own testing). Authenticated
+  requests get a much higher limit. A Docker Hub
+  [access token](https://hub.docker.com/settings/security) or a GHCR
+  [personal access token](https://github.com/settings/tokens) with
+  `read:packages` both work as the "token" field — use a token, not
+  your account password.
 
 ## Setup
 
@@ -70,6 +109,24 @@ Settings → Devices & Services → Add Integration → **Docker Update Tracker*
 Give it a name (e.g. "hapc" or "NAS") and the proxy's URL
 (`http://127.0.0.1:2375`, `http://10.10.10.10:2375`, ...). Repeat once
 per host.
+
+### 4. (Optional) Set global options
+
+"Configure" on any host entry — see [Global settings](#global-settings)
+above.
+
+## Container display names/icons (optional)
+
+Add Docker labels to any container to control how its entity shows up,
+independent of the container's own name:
+
+```yaml
+labels:
+  - dut.friendly_name=Home Assistant
+  - dut.icon=mdi:home-assistant
+```
+
+Falls back to the raw container name and `mdi:docker` if not set.
 
 ## Disclaimer
 
