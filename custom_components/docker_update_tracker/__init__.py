@@ -18,6 +18,7 @@ every other container's data still updates normally.
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -26,7 +27,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import DockerProxyClient, DockerProxyError, RegistryClient, RegistryError
-from .const import CONF_PROXY_URL, DEFAULT_SCAN_INTERVAL, DOMAIN, PLATFORMS
+from .const import CONF_PROXY_URL, DEFAULT_SCAN_INTERVAL_HOURS, DOMAIN, PLATFORMS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             hass,
             _LOGGER,
             name=f"{DOMAIN} ({host_name})",
-            update_interval=DEFAULT_SCAN_INTERVAL,
+            update_interval=timedelta(hours=DEFAULT_SCAN_INTERVAL_HOURS),
         )
         self._proxy = proxy_client
         self._registry = registry_client

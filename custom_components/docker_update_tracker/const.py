@@ -1,15 +1,13 @@
 """Constants for Docker Update Tracker."""
 from __future__ import annotations
 
-from datetime import timedelta
-
 DOMAIN = "docker_update_tracker"
 PLATFORMS = ["update"]
 
 CONF_NAME = "name"
 CONF_PROXY_URL = "proxy_url"
 
-DEFAULT_SCAN_INTERVAL = timedelta(hours=1)
+DEFAULT_SCAN_INTERVAL_HOURS = 12
 
 # Registry hosts that are NOT Docker Hub. Anything whose image reference's
 # first path segment contains a "." or ":" is treated as an explicit
