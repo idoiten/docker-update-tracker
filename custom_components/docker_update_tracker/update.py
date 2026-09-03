@@ -48,10 +48,11 @@ class DockerContainerUpdateEntity(CoordinatorEntity[DockerUpdateCoordinator], Up
     """One update entity per Docker container."""
 
     _attr_has_entity_name = True
-    # No INSTALL support - this integration is informational only,
-    # deliberately (same philosophy as Safe Orphan Cleaner: report
-    # accurately, don't attempt live actions against Docker itself).
-    _attr_supported_features = 0
+    # No supported_features override needed - UpdateEntity's own default
+    # (no features, no INSTALL button) is exactly what we want, since
+    # this integration is informational only by design. Setting a bare
+    # `0` here previously broke HA's own supported_features handling,
+    # which expects a real UpdateEntityFeature flag, not a plain int.
 
     def __init__(
         self, coordinator: DockerUpdateCoordinator, entry: ConfigEntry, container_name: str
