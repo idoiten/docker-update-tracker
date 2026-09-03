@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a Docker host",
+        "description": "Enter a name for this host and the address of its docker-socket-proxy (e.g. http://127.0.0.1:2375 for the local host, or http://10.10.10.10:2375 for a remote one). Add this integration again for each additional host.",
+        "data": {
+          "name": "Name",
+          "proxy_url": "Docker socket proxy URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the docker-socket-proxy at that address. Check the URL and that the proxy container is running."
+    },
+    "abort": {
+      "already_configured": "This host is already configured."
+    }
+  }
+}

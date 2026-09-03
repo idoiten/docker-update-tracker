@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Lägg till en Docker-värd",
+        "description": "Ange ett namn för den här värden och adressen till dess docker-socket-proxy (t.ex. http://127.0.0.1:2375 för den lokala värden, eller http://10.10.10.10:2375 för en fjärrvärd). Lägg till integrationen igen för varje ytterligare värd.",
+        "data": {
+          "name": "Namn",
+          "proxy_url": "Docker socket-proxyns URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Kunde inte ansluta till docker-socket-proxyn på den adressen. Kontrollera URL:en och att proxy-containern faktiskt kör."
+    },
+    "abort": {
+      "already_configured": "Den här värden är redan konfigurerad."
+    }
+  }
+}
