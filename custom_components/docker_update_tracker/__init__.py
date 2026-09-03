@@ -62,25 +62,32 @@ class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
         for container in containers:
             name = container.get("Names", ["?"])[0].lstrip("/")
-            image_id = container.get("Image")
-            if not image_id:
+            # Despite the Docker API's own field name "Image", this is the
+            # tag reference the container was created from (e.g.
+            # "alpine:latest"), not a sha256 id - the proxy's
+            # /images/<x>/json endpoint accepts either interchangeably.
+            image_ref = container.get("Image")
+            if not image_ref:
                 continue
 
             try:
-                image_info = await self._proxy.get_image(image_id)
+                image_info = await self._proxy.get_image(image_ref)
             except DockerProxyError as err:
                 _LOGGER.warning("Skipping %s - could not inspect image: %s", name, err)
                 continue
 
             repo_digests: list[str] = image_info.get("RepoDigests") or []
-            repo_tags: list[str] = image_info.get("RepoTags") or []
-            if not repo_digests or not repo_tags:
-                # Locally built / untagged images have neither - nothing to
-                # compare against a registry, so just skip them silently.
+            if not repo_digests:
+                # Locally built / untagged images have no digest - nothing
+                # to compare against a registry, so just skip silently.
                 continue
 
             installed_digest = repo_digests[0].split("@", 1)[-1]
-            image_ref = repo_tags[0]
+            # Deliberately NOT using image_info.get("RepoTags")[0] here - an
+            # image can carry MULTIPLE tags (e.g. both "myimage:1.2.3" and
+            # "myimage:latest" pointing at the same digest), and RepoTags[0]
+            # isn't guaranteed to be the one THIS container tracks.
+            # image_ref (the container's own "Image" field) always is.
 
             # Keep any previously-known latest_digest if this refresh's
             # lookup fails, so the entity doesn't flicker to "unknown".
