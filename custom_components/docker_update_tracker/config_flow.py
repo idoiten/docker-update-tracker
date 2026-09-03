@@ -55,7 +55,7 @@ class DockerUpdateTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         these on ANY entry applies them to every Docker Update Tracker
         entry, since these aren't really per-host concerns.
         """
-        return GlobalOptionsFlowHandler(config_entry)
+        return GlobalOptionsFlowHandler()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -98,10 +98,11 @@ class GlobalOptionsFlowHandler(config_entries.OptionsFlow):
     submit, the same values are written to every entry's .options and
     every entry is reloaded, regardless of which one's "Configure"
     button was used to get here.
-    """
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        self.config_entry = config_entry
+    Deliberately no __init__ override - self.config_entry is provided
+    automatically by the base OptionsFlow class; setting it manually is
+    deprecated and, as of HA 2025.12, fails outright (500 error).
+    """
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
