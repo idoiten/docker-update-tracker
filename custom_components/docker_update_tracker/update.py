@@ -61,7 +61,6 @@ class DockerContainerUpdateEntity(CoordinatorEntity[DockerUpdateCoordinator], Up
         self._container_name = container_name
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_{container_name}"
-        self._attr_name = container_name
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=entry.title,
@@ -76,6 +75,18 @@ class DockerContainerUpdateEntity(CoordinatorEntity[DockerUpdateCoordinator], Up
     @property
     def available(self) -> bool:
         return super().available and self._data is not None
+
+    @property
+    def name(self) -> str | None:
+        data = self._data
+        return data["display_name"] if data else self._container_name
+
+    @property
+    def icon(self) -> str | None:
+        data = self._data
+        if data and data.get("icon"):
+            return data["icon"]
+        return "mdi:docker"
 
     @property
     def installed_version(self) -> str | None:

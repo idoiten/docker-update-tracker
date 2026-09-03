@@ -93,12 +93,16 @@ class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     "Could not check latest digest for %s (%s): %s", name, image_ref, err
                 )
 
+            labels: dict[str, str] = container.get("Labels") or {}
+
             results[name] = {
                 "container_id": container.get("Id"),
                 "image_ref": image_ref,
                 "installed_digest": installed_digest,
                 "latest_digest": latest_digest,
                 "host_name": self.host_name,
+                "display_name": labels.get("dut.friendly_name") or name,
+                "icon": labels.get("dut.icon"),
             }
 
         return results
