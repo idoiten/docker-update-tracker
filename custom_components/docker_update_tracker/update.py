@@ -9,7 +9,6 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.util import slugify
 
 from . import DockerUpdateCoordinator
 from .const import DOMAIN
@@ -66,9 +65,11 @@ class DockerContainerUpdateEntity(CoordinatorEntity[DockerUpdateCoordinator], Up
         self._container_name = container_name
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_{container_name}"
-        self._attr_suggested_object_id = (
-            f"dut_{slugify(coordinator.host_name)}_{slugify(container_name)}"
-        )
+        # The real, HA-respected attribute (unlike a custom `name` property,
+        # which is NOT read at entity_id generation time). Container labels
+        # don't change at runtime, so resolving this once here is safe.
+        initial_data = coordinator.data.get(container_name, {}) if coordinator.data else {}
+        self._attr_name = initial_data.get("display_name", container_name)
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=entry.title,
@@ -83,11 +84,6 @@ class DockerContainerUpdateEntity(CoordinatorEntity[DockerUpdateCoordinator], Up
     @property
     def available(self) -> bool:
         return super().available and self._data is not None
-
-    @property
-    def name(self) -> str | None:
-        data = self._data
-        return data["display_name"] if data else self._container_name
 
     @property
     def icon(self) -> str | None:
