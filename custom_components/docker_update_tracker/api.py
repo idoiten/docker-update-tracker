@@ -257,8 +257,18 @@ class RegistryClient:
         works exactly as before - no regression risk.
         """
         status, digest, _ = await self._manifest_request("head", manifest_url, headers)
+        method_used = "HEAD"
         if status == 405:
             status, digest, _ = await self._manifest_request("get", manifest_url, headers)
+            method_used = "GET (405 fallback)"
+
+        _LOGGER.debug(
+            "Manifest check via %s -> status=%s digest=%s url=%s",
+            method_used,
+            status,
+            digest,
+            manifest_url,
+        )
 
         if status == 401:
             if raise_on_401:
