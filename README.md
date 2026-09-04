@@ -9,7 +9,8 @@ across as many hosts as you like, plus per-host summary entities.
 
 1. Reads containers from a
    [`tecnativa/docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)
-   instance on each Docker host (read-only — `CONTAINERS=1 IMAGES=1 POST=0`).
+   instance on each Docker host (read-only — `CONTAINERS=1 IMAGES=1 POST=0`,
+   optionally `EVENTS=1` — see [Instant detection](#instant-detection-optional)).
 2. For each container, reads its current image's digest.
 3. Looks up the latest available digest for that same `image:tag` from
    its registry (Docker Hub, GHCR, or anything else — see below).
@@ -45,6 +46,35 @@ Per host (one config entry = one host):
 format setting — Settings → Devices & Services → the gear icon — the
 Swedish `friendly_name`s above are always exactly as shown regardless.)
 
+## Instant detection (optional)
+
+By default, status only updates on the scan interval below (default 12h)
+or when manually triggered (reload the integration, or call
+`homeassistant.update_entity` targeting any entity on that host — all
+entities on a host share one coordinator, so any one of them refreshes
+all of them).
+
+Add `EVENTS: 1` to a host's docker-socket-proxy to get near-instant
+updates instead: the integration opens a long-lived connection to the
+proxy's `/events` endpoint and triggers a refresh within moments of a
+container actually restarting (e.g. after `docker compose pull && up -d`)
+— no more waiting for the next scheduled scan.
+
+```yaml
+services:
+  docker-proxy:
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      EVENTS: 1      # add this line
+      POST: 0
+```
+
+Without it, everything still works exactly as before via the regular
+scan interval — this is a graceful add-on, not a requirement. If
+`EVENTS` isn't enabled, the integration logs one warning per host at
+startup and falls back to polling only, no crash, no retry spam.
+
 ## Global settings
 
 Docker Hub / GHCR credentials and the scan interval are configured via
@@ -56,7 +86,9 @@ duplicate it per entry.
 
 - **Scan interval**: 1–168 hours, default 12 (matches a common WUD cron
   cadence). Hourly polling of a couple dozen containers can add up to
-  hundreds of registry requests a day.
+  hundreds of registry requests a day. Largely a fallback once
+  [instant detection](#instant-detection-optional) is enabled, since
+  most updates will already be caught the moment they happen.
 - **Docker Hub / GHCR username + token** (both optional, independently):
   anonymous registry requests have a low rate limit and can start
   failing with `429 Too Many Requests` under regular use (this is what
@@ -79,6 +111,7 @@ services:
     environment:
       CONTAINERS: 1
       IMAGES: 1
+      EVENTS: 1        # optional - see "Instant detection" above
       POST: 0          # read-only - never allow writes
     ports:
       - "127.0.0.1:2375:2375"   # bind to localhost only for a local host;
