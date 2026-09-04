@@ -17,9 +17,11 @@ RegistryClient
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
+from collections.abc import AsyncIterator
 
 import aiohttp
 
@@ -41,6 +43,12 @@ TOKEN_EXPIRY_MARGIN_SECONDS = 10
 
 class DockerProxyError(Exception):
     """Raised on any docker-socket-proxy communication failure."""
+
+
+class DockerProxyPermissionError(DockerProxyError):
+    """Raised specifically on a 403 - the proxy's env vars don't allow
+    this call (e.g. EVENTS not enabled). Retrying won't help without a
+    config change, unlike a transient network error."""
 
 
 class RegistryError(Exception):
@@ -73,6 +81,47 @@ class DockerProxyClient:
                 return await resp.json()
         except (aiohttp.ClientError, TimeoutError) as err:
             raise DockerProxyError(f"Failed to get image {image_id} via {url}: {err}") from err
+
+    async def stream_events(self) -> AsyncIterator[dict]:
+        """Stream Docker container lifecycle events as they happen.
+
+        A long-lived connection - the caller is expected to iterate this
+        indefinitely and handle disconnects (this only yields events for
+        as long as the underlying HTTP stream stays open; on any error it
+        raises rather than silently ending, so the caller can distinguish
+        "stream ended cleanly" - which shouldn't normally happen - from
+        a real failure).
+
+        Requires EVENTS: 1 on the docker-socket-proxy; raises
+        DockerProxyPermissionError (not the generic DockerProxyError) if
+        that isn't enabled, so callers can tell "needs reconfiguration"
+        apart from "transient network blip, just retry".
+        """
+        filters = json.dumps({"type": ["container"], "event": ["start", "die"]})
+        url = f"{self._base_url}/events"
+        try:
+            async with self._session.get(
+                url,
+                params={"filters": filters},
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=15),
+            ) as resp:
+                if resp.status == 403:
+                    raise DockerProxyPermissionError(
+                        f"{url} returned 403 - is EVENTS: 1 set on this proxy?"
+                    )
+                resp.raise_for_status()
+                async for line in resp.content:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+        except DockerProxyPermissionError:
+            raise
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise DockerProxyError(f"Event stream via {url} failed: {err}") from err
 
 
 def parse_image_ref(image_ref: str) -> tuple[str | None, str, str]:

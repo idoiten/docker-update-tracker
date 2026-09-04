@@ -23,6 +23,7 @@ login and a sensible scan cadence aren't really per-host concerns.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 from typing import Any
@@ -32,7 +33,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import DockerProxyClient, DockerProxyError, RegistryClient, RegistryError
+from .api import (
+    DockerProxyClient,
+    DockerProxyError,
+    DockerProxyPermissionError,
+    RegistryClient,
+    RegistryError,
+)
 from .const import (
     CONF_DOCKERHUB_TOKEN,
     CONF_DOCKERHUB_USERNAME,
@@ -48,6 +55,11 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Reconnect backoff for the Docker events stream: start quick, cap so we
+# don't hammer a genuinely-down proxy forever.
+EVENT_RECONNECT_INITIAL_SECONDS = 5
+EVENT_RECONNECT_MAX_SECONDS = 300
 
 
 class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
@@ -70,6 +82,7 @@ class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._proxy = proxy_client
         self._registry = registry_client
         self.host_name = host_name
+        self.event_task: asyncio.Task | None = None
 
     @property
     def available_updates(self) -> list[str]:
@@ -83,6 +96,78 @@ class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             and info.get("installed_digest")
             and info["latest_digest"] != info["installed_digest"]
         ]
+
+    def start_event_listener(self, hass: HomeAssistant) -> None:
+        """Start the background Docker events listener, if not already running."""
+        if self.event_task is not None and not self.event_task.done():
+            return
+        self.event_task = hass.async_create_background_task(
+            self._listen_for_events(),
+            name=f"{DOMAIN}_{self.host_name}_events",
+        )
+
+    def stop_event_listener(self) -> None:
+        """Cancel the background listener, if running. Safe to call anytime."""
+        if self.event_task is not None:
+            self.event_task.cancel()
+            self.event_task = None
+
+    async def _listen_for_events(self) -> None:
+        """Long-lived Docker events listener.
+
+        On a relevant container start/die event, triggers a full refresh
+        of this host (via async_request_refresh, which the coordinator
+        itself debounces) rather than a narrower single-container update -
+        events are relatively rare, so a full refresh per event is simple
+        and correct without the extra complexity of a per-container path.
+
+        A 403 (EVENTS not enabled on the proxy) is treated as permanent
+        for this session - logs once and returns, rather than retrying
+        every few seconds forever against something a restart can't fix.
+        Any other failure (network blip, proxy restart, ...) backs off
+        exponentially and keeps retrying indefinitely.
+        """
+        backoff = EVENT_RECONNECT_INITIAL_SECONDS
+        while True:
+            try:
+                async for event in self._proxy.stream_events():
+                    action = event.get("Action")
+                    if action not in ("start", "die"):
+                        continue
+                    container_name = (
+                        event.get("Actor", {}).get("Attributes", {}).get("name", "?")
+                    )
+                    _LOGGER.debug(
+                        "Docker event (%s) for %s on %s - requesting refresh",
+                        action,
+                        container_name,
+                        self.host_name,
+                    )
+                    await self.async_request_refresh()
+                # The stream ended without an error, which shouldn't
+                # normally happen - reconnect rather than silently giving
+                # up on event-based detection for the rest of this session.
+                backoff = EVENT_RECONNECT_INITIAL_SECONDS
+            except DockerProxyPermissionError:
+                _LOGGER.warning(
+                    "Docker events not available for %s - the docker-socket-proxy "
+                    "needs EVENTS: 1 in its environment for instant update "
+                    "detection. Falling back to the regular scan interval only "
+                    "(no further retries this session).",
+                    self.host_name,
+                )
+                return
+            except asyncio.CancelledError:
+                raise
+            except DockerProxyError as err:
+                _LOGGER.debug(
+                    "Docker event stream for %s disconnected (%s), reconnecting in %ds",
+                    self.host_name,
+                    err,
+                    backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, EVENT_RECONNECT_MAX_SECONDS)
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         try:
@@ -181,11 +266,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass, proxy_client, registry_client, entry.title, scan_interval_hours
     )
     await coordinator.async_config_entry_first_refresh()
+    coordinator.start_event_listener(hass)
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    entry.async_on_unload(coordinator.stop_event_listener)
     return True
 
 
