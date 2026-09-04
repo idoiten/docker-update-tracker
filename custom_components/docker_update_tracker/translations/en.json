@@ -23,7 +23,7 @@
         "title": "Global settings",
         "description": "These settings apply to ALL configured Docker hosts, not just this one - saving here updates every host and reloads all of them. Docker Hub / GHCR credentials are optional but strongly recommended: anonymous registry requests have a low rate limit and can start failing (429 Too Many Requests) under regular use.",
         "data": {
-          "scan_interval_hours": "Scan interval (hours)",
+          "scan_interval_minutes": "Scan interval (minutes, 5-1440)",
           "dockerhub_username": "Docker Hub username (optional)",
           "dockerhub_token": "Docker Hub access token (optional)",
           "ghcr_username": "GHCR (GitHub) username (optional)",

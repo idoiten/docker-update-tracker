@@ -10,6 +10,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import DockerProxyClient, DockerProxyError
@@ -20,9 +21,11 @@ from .const import (
     CONF_GHCR_USERNAME,
     CONF_NAME,
     CONF_PROXY_URL,
-    CONF_SCAN_INTERVAL_HOURS,
-    DEFAULT_SCAN_INTERVAL_HOURS,
+    CONF_SCAN_INTERVAL_MINUTES,
+    DEFAULT_SCAN_INTERVAL_MINUTES,
     DOMAIN,
+    MAX_SCAN_INTERVAL_MINUTES,
+    MIN_SCAN_INTERVAL_MINUTES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -90,7 +93,7 @@ class DockerUpdateTrackerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class GlobalOptionsFlowHandler(config_entries.OptionsFlow):
-    """Edits scan_interval_hours + registry credentials.
+    """Edits scan_interval_minutes + registry credentials.
 
     These apply to every Docker Update Tracker host, not just the entry
     this flow happened to be opened from - Docker Hub/GHCR credentials
@@ -109,7 +112,7 @@ class GlobalOptionsFlowHandler(config_entries.OptionsFlow):
     ) -> FlowResult:
         if user_input is not None:
             new_options = {
-                CONF_SCAN_INTERVAL_HOURS: user_input[CONF_SCAN_INTERVAL_HOURS],
+                CONF_SCAN_INTERVAL_MINUTES: user_input[CONF_SCAN_INTERVAL_MINUTES],
                 CONF_DOCKERHUB_USERNAME: user_input.get(CONF_DOCKERHUB_USERNAME, ""),
                 CONF_DOCKERHUB_TOKEN: user_input.get(CONF_DOCKERHUB_TOKEN, ""),
                 CONF_GHCR_USERNAME: user_input.get(CONF_GHCR_USERNAME, ""),
@@ -126,9 +129,17 @@ class GlobalOptionsFlowHandler(config_entries.OptionsFlow):
         schema = vol.Schema(
             {
                 vol.Required(
-                    CONF_SCAN_INTERVAL_HOURS,
-                    default=current.get(CONF_SCAN_INTERVAL_HOURS, DEFAULT_SCAN_INTERVAL_HOURS),
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=168)),
+                    CONF_SCAN_INTERVAL_MINUTES,
+                    default=current.get(
+                        CONF_SCAN_INTERVAL_MINUTES, DEFAULT_SCAN_INTERVAL_MINUTES
+                    ),
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=MIN_SCAN_INTERVAL_MINUTES,
+                        max=MAX_SCAN_INTERVAL_MINUTES,
+                        mode=selector.NumberSelectorMode.BOX,
+                    )
+                ),
                 vol.Optional(
                     CONF_DOCKERHUB_USERNAME,
                     default=current.get(CONF_DOCKERHUB_USERNAME, ""),

@@ -6,13 +6,15 @@ PLATFORMS = ["update", "binary_sensor", "sensor"]
 
 CONF_NAME = "name"
 CONF_PROXY_URL = "proxy_url"
-CONF_SCAN_INTERVAL_HOURS = "scan_interval_hours"
+CONF_SCAN_INTERVAL_MINUTES = "scan_interval_minutes"
 CONF_DOCKERHUB_USERNAME = "dockerhub_username"
 CONF_DOCKERHUB_TOKEN = "dockerhub_token"
 CONF_GHCR_USERNAME = "ghcr_username"
 CONF_GHCR_TOKEN = "ghcr_token"
 
-DEFAULT_SCAN_INTERVAL_HOURS = 12
+DEFAULT_SCAN_INTERVAL_MINUTES = 720  # 12 hours
+MIN_SCAN_INTERVAL_MINUTES = 5
+MAX_SCAN_INTERVAL_MINUTES = 1440  # 24 hours
 
 GHCR_REGISTRY = "ghcr.io"
 

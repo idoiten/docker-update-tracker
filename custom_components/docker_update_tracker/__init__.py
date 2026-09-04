@@ -15,7 +15,7 @@ fails the whole coordinator update - that container is just reported
 without a known latest_digest until the next successful refresh, while
 every other container's data still updates normally.
 
-scan_interval_hours and registry credentials are GLOBAL settings, not
+scan_interval_minutes and registry credentials are GLOBAL settings, not
 per-host: editing them via any single entry's "Configure" dialog writes
 the same values to every Docker Update Tracker entry and reloads all of
 them (see config_flow.py's GlobalOptionsFlowHandler) - a Docker Hub/GHCR
@@ -46,8 +46,8 @@ from .const import (
     CONF_GHCR_TOKEN,
     CONF_GHCR_USERNAME,
     CONF_PROXY_URL,
-    CONF_SCAN_INTERVAL_HOURS,
-    DEFAULT_SCAN_INTERVAL_HOURS,
+    CONF_SCAN_INTERVAL_MINUTES,
+    DEFAULT_SCAN_INTERVAL_MINUTES,
     DOCKER_HUB_REGISTRY,
     DOMAIN,
     GHCR_REGISTRY,
@@ -71,13 +71,13 @@ class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         proxy_client: DockerProxyClient,
         registry_client: RegistryClient,
         host_name: str,
-        scan_interval_hours: int,
+        scan_interval_minutes: int,
     ) -> None:
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN} ({host_name})",
-            update_interval=timedelta(hours=scan_interval_hours),
+            update_interval=timedelta(minutes=scan_interval_minutes),
         )
         self._proxy = proxy_client
         self._registry = registry_client
@@ -258,12 +258,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     credentials = _build_credentials(entry.options)
     registry_client = RegistryClient(session, credentials=credentials)
 
-    scan_interval_hours = entry.options.get(
-        CONF_SCAN_INTERVAL_HOURS, DEFAULT_SCAN_INTERVAL_HOURS
+    scan_interval_minutes = entry.options.get(
+        CONF_SCAN_INTERVAL_MINUTES, DEFAULT_SCAN_INTERVAL_MINUTES
     )
 
     coordinator = DockerUpdateCoordinator(
-        hass, proxy_client, registry_client, entry.title, scan_interval_hours
+        hass, proxy_client, registry_client, entry.title, scan_interval_minutes
     )
     await coordinator.async_config_entry_first_refresh()
     coordinator.start_event_listener(hass)
