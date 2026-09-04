@@ -219,22 +219,53 @@ class RegistryClient:
             raise RegistryError(f"No Docker-Content-Digest in response for {image_ref}")
         return digest
 
+    async def _manifest_request(
+        self, method: str, url: str, headers: dict
+    ) -> tuple[int, str | None, str]:
+        """One HEAD or GET to a manifest URL.
+
+        Returns (status, digest_or_None, www_authenticate_header_or_empty).
+        """
+        try:
+            request_fn = self._session.head if method == "head" else self._session.get
+            async with request_fn(
+                url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                return (
+                    resp.status,
+                    resp.headers.get("Docker-Content-Digest"),
+                    resp.headers.get("WWW-Authenticate", ""),
+                )
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise RegistryError(f"Failed to query manifest via {url} ({method}): {err}") from err
+
     async def _fetch_manifest_digest(
         self, manifest_url: str, headers: dict, raise_on_401: bool = False
     ) -> str | None:
-        """GET the manifest. Returns the digest, or None on a 401 (caller
-        decides whether to retry) unless raise_on_401 is set."""
-        try:
-            async with self._session.get(
-                manifest_url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
-                if resp.status == 401 and not raise_on_401:
-                    return None
-                resp.raise_for_status()
-                digest = resp.headers.get("Docker-Content-Digest")
-        except (aiohttp.ClientError, TimeoutError) as err:
-            raise RegistryError(f"Failed to query manifest via {manifest_url}: {err}") from err
+        """HEAD the manifest (GET fallback if unsupported).
 
+        Returns the digest, or None on a 401 (caller decides whether to
+        retry) unless raise_on_401 is set.
+
+        HEAD is used deliberately: Docker Hub's own docs state a GET on
+        a manifest "emulates a real pull and counts" against the pull
+        rate limit, while a HEAD "won't" - both return identical headers
+        (including Docker-Content-Digest), we never read the body either
+        way, so this is a pure win. Confirmed working identically on
+        GHCR too (manual test, 2026-09-04). Falls back to GET on a 405,
+        so any registry that doesn't support HEAD on this endpoint still
+        works exactly as before - no regression risk.
+        """
+        status, digest, _ = await self._manifest_request("head", manifest_url, headers)
+        if status == 405:
+            status, digest, _ = await self._manifest_request("get", manifest_url, headers)
+
+        if status == 401:
+            if raise_on_401:
+                raise RegistryError(f"{manifest_url} returned 401 Unauthorized")
+            return None
+        if status >= 400:
+            raise RegistryError(f"{manifest_url} returned HTTP {status}")
         if not digest:
             raise RegistryError(f"No Docker-Content-Digest in response from {manifest_url}")
         return digest
@@ -252,17 +283,21 @@ class RegistryClient:
                     return token
 
         probe_url = f"https://{host}/v2/{repo}/manifests/latest"
+        probe_headers = {"Accept": MANIFEST_ACCEPT_HEADER}
         try:
-            async with self._session.get(
-                probe_url,
-                headers={"Accept": MANIFEST_ACCEPT_HEADER},
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status != 401:
-                    return None  # registry didn't ask for auth at all
-                token, ttl = await self._token_from_challenge(resp, host, repo)
-        except (aiohttp.ClientError, TimeoutError):
+            status, _, challenge = await self._manifest_request(
+                "head", probe_url, probe_headers
+            )
+            if status == 405:
+                status, _, challenge = await self._manifest_request(
+                    "get", probe_url, probe_headers
+                )
+        except RegistryError:
             return None
+
+        if status != 401:
+            return None  # registry didn't ask for auth at all
+        token, ttl = await self._token_from_challenge(challenge, host, repo)
 
         if token:
             expires_at = time.monotonic() + max(ttl - TOKEN_EXPIRY_MARGIN_SECONDS, 5)
@@ -270,13 +305,12 @@ class RegistryClient:
         return token
 
     async def _token_from_challenge(
-        self, resp: aiohttp.ClientResponse, host: str, repo: str
+        self, challenge: str, host: str, repo: str
     ) -> tuple[str | None, int]:
-        """Follow a WWW-Authenticate: Bearer ... challenge and fetch a token.
+        """Follow a WWW-Authenticate: Bearer ... challenge string and fetch a token.
 
         Returns (token_or_None, ttl_seconds).
         """
-        challenge = resp.headers.get("WWW-Authenticate", "")
         if not challenge.lower().startswith("bearer"):
             return None, DEFAULT_TOKEN_TTL_SECONDS
 
