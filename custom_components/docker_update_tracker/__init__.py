@@ -151,9 +151,9 @@ class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             except DockerProxyPermissionError:
                 _LOGGER.warning(
                     "Docker events not available for %s - the docker-socket-proxy "
-                    "needs EVENTS: 1 in its environment for instant update "
-                    "detection. Falling back to the regular scan interval only "
-                    "(no further retries this session).",
+                    "has its EVENTS section explicitly revoked (EVENTS=0). Falling "
+                    "back to the regular scan interval only (no further retries "
+                    "this session).",
                     self.host_name,
                 )
                 return

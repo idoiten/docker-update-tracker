@@ -92,10 +92,12 @@ class DockerProxyClient:
         "stream ended cleanly" - which shouldn't normally happen - from
         a real failure).
 
-        Requires EVENTS: 1 on the docker-socket-proxy; raises
-        DockerProxyPermissionError (not the generic DockerProxyError) if
-        that isn't enabled, so callers can tell "needs reconfiguration"
-        apart from "transient network blip, just retry".
+        Requires the proxy's EVENTS section to be allowed - true by
+        default on tecnativa/docker-socket-proxy (see its "granted by
+        default" list) unless explicitly revoked with EVENTS=0. Raises
+        DockerProxyPermissionError (not the generic DockerProxyError) on
+        a 403, so callers can tell "needs reconfiguration" apart from
+        "transient network blip, just retry".
         """
         filters = json.dumps({"type": ["container"], "event": ["start", "die"]})
         url = f"{self._base_url}/events"
@@ -107,7 +109,8 @@ class DockerProxyClient:
             ) as resp:
                 if resp.status == 403:
                     raise DockerProxyPermissionError(
-                        f"{url} returned 403 - is EVENTS: 1 set on this proxy?"
+                        f"{url} returned 403 - has this proxy's EVENTS section "
+                        "been explicitly revoked (EVENTS=0)?"
                     )
                 resp.raise_for_status()
                 async for line in resp.content:
