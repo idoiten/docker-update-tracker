@@ -105,6 +105,13 @@ class GlobalOptionsFlowHandler(config_entries.OptionsFlow):
     Deliberately no __init__ override - self.config_entry is provided
     automatically by the base OptionsFlow class; setting it manually is
     deprecated and, as of HA 2025.12, fails outright (500 error).
+
+    Also deliberately does NOT call async_reload() explicitly after
+    async_update_entry() - that would double-reload every entry (two
+    full scans back to back), since async_update_entry() itself already
+    fires each entry's registered update listener (_async_update_listener
+    in __init__.py), which does the reload. This bug was present through
+    0.6.0 and confirmed via the resulting duplicate log entries.
     """
 
     async def async_step_init(
@@ -120,9 +127,6 @@ class GlobalOptionsFlowHandler(config_entries.OptionsFlow):
             }
             for entry in self.hass.config_entries.async_entries(DOMAIN):
                 self.hass.config_entries.async_update_entry(entry, options=new_options)
-                self.hass.async_create_task(
-                    self.hass.config_entries.async_reload(entry.entry_id)
-                )
             return self.async_create_entry(title="", data=new_options)
 
         current = self.config_entry.options
