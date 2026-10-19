@@ -199,6 +199,11 @@ class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 # to compare against a registry, so just skip silently.
                 continue
 
+            # An image can list SEVERAL digests (e.g. the manifest-list
+            # digest plus a per-platform digest; Podman sorts them
+            # alphabetically), so RepoDigests[0] is effectively arbitrary.
+            # Keep all of them and match the registry's digest against any.
+            installed_digests = {d.split("@", 1)[-1] for d in repo_digests}
             installed_digest = repo_digests[0].split("@", 1)[-1]
             # Deliberately NOT using image_info.get("RepoTags")[0] here - an
             # image can carry MULTIPLE tags (e.g. both "myimage:1.2.3" and
@@ -217,6 +222,9 @@ class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 _LOGGER.warning(
                     "Could not check latest digest for %s (%s): %s", name, image_ref, err
                 )
+
+            if latest_digest in installed_digests:
+                installed_digest = latest_digest
 
             labels: dict[str, str] = container.get("Labels") or {}
 
