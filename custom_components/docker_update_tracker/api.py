@@ -32,6 +32,14 @@ _LOGGER = logging.getLogger(__name__)
 # Parses: Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:x/y:pull"
 _AUTH_HEADER_RE = re.compile(r'(\w+)="([^"]*)"')
 
+# Explicit host names that all mean "Docker Hub". Podman (and fully
+# qualified references in general) write e.g. "docker.io/library/alpine",
+# but none of these except registry-1.docker.io actually serves the
+# registry v2 API, so they must be mapped to the Docker Hub default.
+_DOCKER_HUB_ALIASES = frozenset(
+    {"docker.io", "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com"}
+)
+
 # Registry v2 tokens don't always include expires_in - fall back to this
 # (Docker Hub's own default is 300s; being conservative costs one extra
 # token request occasionally, which is far cheaper than a stale-token 401).
@@ -131,8 +139,10 @@ def parse_image_ref(image_ref: str) -> tuple[str | None, str, str]:
     """Parse a Docker image reference into (registry_host_or_None, repo, tag).
 
     registry_host is None for Docker Hub (the default when no explicit host
-    is present). A bare single-segment repo (e.g. "eclipse-mosquitto") gets
-    the "library/" prefix Docker Hub requires for its official images.
+    is present, and also when the reference spells Docker Hub out as
+    "docker.io/..." as Podman does). A bare single-segment repo (e.g.
+    "eclipse-mosquitto") gets the "library/" prefix Docker Hub requires
+    for its official images.
     """
     if "/" in image_ref:
         last_slash = image_ref.rfind("/")
@@ -156,8 +166,12 @@ def parse_image_ref(image_ref: str) -> tuple[str | None, str, str]:
     else:
         registry_host = None
         repo = path_no_tag
-        if "/" not in repo:
-            repo = f"library/{repo}"
+
+    if registry_host in _DOCKER_HUB_ALIASES:
+        registry_host = None
+
+    if registry_host is None and "/" not in repo:
+        repo = f"library/{repo}"
 
     return registry_host, repo, tag
 
