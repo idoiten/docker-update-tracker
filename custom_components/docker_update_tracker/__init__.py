@@ -4,7 +4,8 @@ One config entry per Docker host (a tecnativa/docker-socket-proxy
 instance). Each entry's DataUpdateCoordinator periodically:
 
   1. Lists running containers via the proxy.
-  2. For each, reads its current image's RepoDigests/RepoTags.
+  2. For each, reads the RepoDigests/RepoTags of the image the container is
+     actually running (see the ImageID handling below).
   3. Looks up the latest available digest for that image:tag from its
      registry (Docker Hub, GHCR, or anything else - see api.py).
   4. Compares current vs latest digest.
@@ -60,6 +61,12 @@ _LOGGER = logging.getLogger(__name__)
 # don't hammer a genuinely-down proxy forever.
 EVENT_RECONNECT_INITIAL_SECONDS = 5
 EVENT_RECONNECT_MAX_SECONDS = 300
+
+
+def _normalize_image_id(image_id: str) -> str:
+    """Strip the optional "sha256:" prefix so ids from different API
+    endpoints (container list vs image inspect) compare equal."""
+    return image_id.removeprefix("sha256:")
 
 
 class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
@@ -193,8 +200,35 @@ class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 _LOGGER.warning("Skipping %s - could not inspect image: %s", name, err)
                 continue
 
+            # The tag in image_ref always points at the NEWEST local image
+            # with that name. After "pull" but before the container is
+            # recreated, the container still runs an OLDER image, so
+            # inspecting the tag would report the new digest and the
+            # container would wrongly look up to date. The container's
+            # ImageID is the image it is actually running: when it differs
+            # from the tag's current image Id, inspect that one instead.
+            running_id = container.get("ImageID") or ""
+            tag_id = image_info.get("Id") or ""
+            image_outdated = bool(
+                running_id
+                and tag_id
+                and _normalize_image_id(running_id) != _normalize_image_id(tag_id)
+            )
+            if image_outdated:
+                try:
+                    image_info = await self._proxy.get_image(running_id)
+                except DockerProxyError as err:
+                    _LOGGER.debug(
+                        "Could not inspect running image %s of %s (%s) - "
+                        "treating it as outdated without a digest",
+                        running_id,
+                        name,
+                        err,
+                    )
+                    image_info = {}
+
             repo_digests: list[str] = image_info.get("RepoDigests") or []
-            if not repo_digests:
+            if not repo_digests and not image_outdated:
                 # Locally built / untagged images have no digest - nothing
                 # to compare against a registry, so just skip silently.
                 continue
@@ -204,7 +238,13 @@ class DockerUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             # alphabetically), so RepoDigests[0] is effectively arbitrary.
             # Keep all of them and match the registry's digest against any.
             installed_digests = {d.split("@", 1)[-1] for d in repo_digests}
-            installed_digest = repo_digests[0].split("@", 1)[-1]
+            if repo_digests:
+                installed_digest = repo_digests[0].split("@", 1)[-1]
+            else:
+                # The running image is older than the tag but has lost its
+                # digest (typical after the tag moved). Use a sentinel that
+                # can never equal a registry digest so the update shows up.
+                installed_digest = f"outdated:{_normalize_image_id(running_id)[:12]}"
             # Deliberately NOT using image_info.get("RepoTags")[0] here - an
             # image can carry MULTIPLE tags (e.g. both "myimage:1.2.3" and
             # "myimage:latest" pointing at the same digest), and RepoTags[0]
